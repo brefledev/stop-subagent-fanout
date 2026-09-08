@@ -14,32 +14,74 @@ import { dirname, join } from 'node:path';
 const here = dirname(fileURLToPath(import.meta.url));
 const projectRoot = process.cwd();
 const MATCHER = 'Task|Agent|Workflow';
+const SUBAGENT_TOOLS = ['Task', 'Agent', 'Workflow'];
 const HOOK_CMD =
   'cd "$CLAUDE_PROJECT_DIR" 2>/dev/null || exit 0; cat | node .claude/hooks/subagent-gate.mjs --hook';
 
 const log = m => process.stdout.write(m + '\n');
 const fail = m => { process.stderr.write('✗ ' + m + '\n'); process.exit(1); };
 
-// 1) copy the gate script into <project>/.claude/hooks/
-const src = join(here, 'subagent-gate.mjs');
-if (!existsSync(src)) fail('cannot find subagent-gate.mjs next to install.mjs');
-const hooksDir = join(projectRoot, '.claude', 'hooks');
-mkdirSync(hooksDir, { recursive: true });
-copyFileSync(src, join(hooksDir, 'subagent-gate.mjs'));
-log('✓ copied gate → .claude/hooks/subagent-gate.mjs');
-
-// 2) merge the hook into <project>/.claude/settings.json (preserve anything already there)
+// Read and validate settings before changing anything in the target project.
 const settingsPath = join(projectRoot, '.claude', 'settings.json');
 let settings = {};
 if (existsSync(settingsPath)) {
   try { settings = JSON.parse(readFileSync(settingsPath, 'utf8')); }
   catch { fail('.claude/settings.json is not valid JSON — fix it, then re-run'); }
 }
-settings.hooks ??= {};
-settings.hooks.PreToolUse ??= [];
+if (!settings || typeof settings !== 'object' || Array.isArray(settings)) {
+  fail('.claude/settings.json must contain a JSON object');
+}
+if (!Object.hasOwn(settings, 'hooks')) settings.hooks = {};
+if (!settings.hooks || typeof settings.hooks !== 'object' || Array.isArray(settings.hooks)) {
+  fail('.claude/settings.json hooks must be a JSON object');
+}
+if (!Object.hasOwn(settings.hooks, 'PreToolUse')) settings.hooks.PreToolUse = [];
+if (!Array.isArray(settings.hooks.PreToolUse)) {
+  fail('.claude/settings.json hooks.PreToolUse must be an array');
+}
+
+// 1) copy the gate script into <project>/.claude/hooks/
+const src = join(here, 'subagent-gate.mjs');
+if (!existsSync(src)) fail('cannot find subagent-gate.mjs next to install.mjs');
+const hooksDir = join(projectRoot, '.claude', 'hooks');
+mkdirSync(hooksDir, { recursive: true });
+const destination = join(hooksDir, 'subagent-gate.mjs');
+if (existsSync(destination)) {
+  log('• gate already exists at .claude/hooks/subagent-gate.mjs — left as is');
+} else {
+  copyFileSync(src, destination);
+  log('✓ copied gate → .claude/hooks/subagent-gate.mjs');
+}
+
+// 2) merge the hook into <project>/.claude/settings.json (preserve anything already there)
+function matcherCoversAllTools(matcher) {
+  // Claude Code treats an omitted matcher and `*` as match-all hooks.
+  if (matcher === undefined || matcher === '*') return true;
+  if (typeof matcher !== 'string') return false;
+
+  let pattern;
+  try { pattern = new RegExp(matcher); }
+  catch { return false; }
+
+  return SUBAGENT_TOOLS.every(tool => {
+    pattern.lastIndex = 0;
+    return pattern.test(tool);
+  });
+}
+
+function hasCanonicalCommand(hook) {
+  const compatibleShell = hook &&
+    (!Object.hasOwn(hook, 'shell') || hook.shell === 'bash');
+  return hook && hook.type === 'command' &&
+    typeof hook.command === 'string' && hook.command.trim() === HOOK_CMD &&
+    compatibleShell && !Object.hasOwn(hook, 'args') &&
+    hook.async !== true && hook.asyncRewake !== true;
+}
 
 const alreadyWired = settings.hooks.PreToolUse.some(entry =>
-  (entry.hooks || []).some(h => typeof h.command === 'string' && h.command.includes('subagent-gate.mjs')));
+  entry && typeof entry === 'object' &&
+  matcherCoversAllTools(entry.matcher) &&
+  Array.isArray(entry.hooks) && entry.hooks.some(hasCanonicalCommand));
 
 if (alreadyWired) {
   log('• hook already wired in .claude/settings.json — left as is');
@@ -52,4 +94,4 @@ if (alreadyWired) {
   log('✓ wired PreToolUse hook in .claude/settings.json');
 }
 
-log('\nDone. Restart Claude Code (or start a fresh session) and every subagent spawn asks first.');
+log('\nDone. Restart Claude Code (or start a fresh session) and every configured subagent spawn follows the installed hook policy.');

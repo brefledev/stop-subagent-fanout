@@ -47,7 +47,7 @@ Refusing a spawn doesn't break the turn. Claude Code hands the model the reason 
 Set one environment variable when you launch the session:
 
 ```bash
-SUBAGENT_GATE=allow
+export SUBAGENT_GATE=allow
 ```
 
 With it set, the script returns `allow` and skips the prompt — for when you've decided a bounded fan-out is worth it and you're watching the run.
@@ -79,6 +79,14 @@ It's git-ignored here. In your own project, add `.subagent-gate.log` to your ign
 
 Nothing to compile.
 
+### Tests
+
+Run the dependency-free regression suite with Node:
+
+```bash
+node --test test/install.test.mjs
+```
+
 ## Installation, such as it is
 
 **The lazy way.** Run the installer from the project you want to guard, pointing at wherever you cloned this repo:
@@ -87,7 +95,7 @@ Nothing to compile.
 node /path/to/stop-subagent-fanout/install.mjs
 ```
 
-It copies the gate to `.claude/hooks/subagent-gate.mjs` and wires the `PreToolUse` hook in `.claude/settings.json`, leaving any hooks you already have in place. Run it a second time and it changes nothing. Restart Claude Code and every subagent spawn asks you first.
+It copies the gate to `.claude/hooks/subagent-gate.mjs` when that file is absent, preserves an existing gate and its local policy, and wires the `PreToolUse` hook in `.claude/settings.json`, leaving any hooks you already have in place. Run it a second time and it changes nothing. Restart Claude Code and every configured subagent spawn follows the installed hook policy.
 
 **By hand.** If you'd rather see exactly what changes:
 
